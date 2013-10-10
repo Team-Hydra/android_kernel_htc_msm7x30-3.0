@@ -43,6 +43,36 @@
 #define SNDDEV_ICODEC_CLK_RATE(freq) \
 	(((freq) * (SNDDEV_ICODEC_PCM_SZ)) << (SNDDEV_ICODEC_MUL_FACTOR))
 
+//HTC_CSP_START
+/*
+*	difei_ding, 2012.02.01
+*		we use mclk as AIC3008's main clock, need modify mclk enable/disable timing
+*/
+#if 0
+
+#define AUD_DUMP_CLK
+#ifdef AUD_DUMP_CLK
+#include <linux/io.h>
+#include <mach/msm_iomap.h>
+//#undef MSM_CLK_CTL_BASE
+//#define MSM_CLK_CTL_BASE      IOMEM(0xF8005000)
+static void dump_clk_reg(void)
+{
+	uint32_t data = 0;
+	uint32_t temp = (uint32_t)MSM_CLK_CTL_BASE;
+	printk("MSM_CLK_CTL_BASE: %x\n", temp);
+	data = readl_relaxed(MSM_CLK_CTL_BASE + 0x00);
+	printk("difei *** 0x0000 GLBL_CLK_ENA = %x\n", data);
+	data = readl_relaxed(MSM_CLK_CTL_BASE + 0x2D4);
+	printk("difei *** 0x02D4 SH2_CLK_HALT_STATEC = %x\n", data);
+	data = readl_relaxed(MSM_CLK_CTL_BASE + 0x2E0);
+	printk("difei *** 0x02E0 MI2S_NS_REG = %x\n", data);
+}
+#endif
+
+#endif
+//HTC_CSP_END
+
 static struct q5v2audio_icodec_ops default_audio_ops;
 static struct q5v2audio_icodec_ops *audio_ops = &default_audio_ops;
 static struct q5v2audio_aic3254_ops default_aic3254_ops;
@@ -327,11 +357,13 @@ static int snddev_icodec_open_rx(struct snddev_icodec_state *icodec)
 			/* Enable ADIE */
 			if (adie_codec_proceed_stage(icodec->adie_path,
 						ADIE_CODEC_DIGITAL_READY)) {
+/*				icodec->adie_path->profile = NULL; */
 				goto error_adie;
 			}
 
 			if (adie_codec_proceed_stage(icodec->adie_path,
 						ADIE_CODEC_DIGITAL_ANALOG_READY)) {
+/*				icodec->adie_path->profile = NULL; */
 				goto error_adie;
 			}
 		}
@@ -368,7 +400,6 @@ error_invalid_freq:
 	pr_aud_err("%s: encounter error\n", __func__);
 
 	wake_unlock(&drv->rx_idlelock);
-	printk("%s(): ---\n", __func__);
 	return -ENODEV;
 }
 
@@ -420,10 +451,12 @@ static int snddev_icodec_open_tx(struct snddev_icodec_state *icodec)
 		adie_codec_setpath(icodec->adie_path, icodec->sample_rate, 256);
 		if (adie_codec_proceed_stage(icodec->adie_path,
 				ADIE_CODEC_DIGITAL_READY)) {
+/*			icodec->adie_path->profile = NULL; */
 			goto error_adie;
 		}
 		if (adie_codec_proceed_stage(icodec->adie_path,
 				ADIE_CODEC_DIGITAL_ANALOG_READY)) {
+/*			icodec->adie_path->profile = NULL; */
 			goto error_adie;
 		}
 	}
@@ -449,16 +482,19 @@ error_afe:
 	}
 error_adie:
 	clk_disable(drv->tx_sclk);
+//HTC_CSP_START
+//#ifndef CONFIG_CODEC_AIC3008
 	clk_disable(drv->tx_mclk);
+//#endif
+//HTC_CSP_END
 error_invalid_freq:
+
 	if (icodec->data->pamp_on)
 		icodec->data->pamp_on(0);
 
 	pr_aud_err("%s: encounter error\n", __func__);
 
 	wake_unlock(&drv->tx_idlelock);
-
-	printk("%s(): ---\n", __func__);
 	return -ENODEV;
 }
 
@@ -546,7 +582,11 @@ static int snddev_icodec_close_tx(struct snddev_icodec_state *icodec)
 	/* Disable MI2S TX master block */
 	/* Disable MI2S TX bit clock */
 	clk_disable(drv->tx_sclk);
+//HTC_CSP_START
+//#ifndef CONFIG_CODEC_AIC3008
 	clk_disable(drv->tx_mclk);
+//#endif
+//HTC_CSP_END
 
 	/* Reuse pamp_off for TX platform-specific setup  */
 	if (icodec->data->pamp_on)
@@ -1207,6 +1247,14 @@ static int __init snddev_icodec_init(void)
 		S_IFREG | S_IRUGO, debugfs_sdev_dent,
 		(void *) "adie_loopback", &snddev_icodec_debug_fops);
 	}
+#endif
+#if 0
+	clk_enable(icodec_drv->rx_mclk);
+	clk_enable(icodec_drv->rx_sclk);
+	clk_enable(icodec_drv->tx_mclk);
+	clk_enable(icodec_drv->tx_sclk);
+
+	dump_clk_reg();
 #endif
 	mutex_init(&icodec_drv->rx_lock);
 	mutex_init(&icodec_drv->tx_lock);

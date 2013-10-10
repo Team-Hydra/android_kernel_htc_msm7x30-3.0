@@ -96,6 +96,7 @@
 #endif
 #include <mach/board_htc.h>
 #include <mach/cable_detect.h>
+#include <linux/tpa2051d3.h>
 #include "devices.h"
 #include "timer.h"
 #include "proc_comm.h"
@@ -251,25 +252,12 @@ static struct attribute_group glacier_properties_attr_group = {
 	.attrs = glacier_properties_attrs,
 };
 
-static uint32_t proximity_on_gpio_table[] = {
+static uint32_t proximity_gpio_table[] = {
 	PCOM_GPIO_CFG(GLACIER_GPIO_PROXIMITY_INT_N,
-		0, GPIO_INPUT, GPIO_NO_PULL, 0), /* PS_VOUT */
-};
-
-static uint32_t proximity_off_gpio_table[] = {
+		0, GPIO_INPUT, GPIO_NO_PULL, 0), /* ON */
 	PCOM_GPIO_CFG(GLACIER_GPIO_PROXIMITY_INT_N,
-		0, GPIO_INPUT, GPIO_PULL_DOWN, 0) /* PS_VOUT */
+		0, GPIO_INPUT, GPIO_PULL_DOWN, 0) /* OFF */
 };
-
-void config_glacier_proximity_gpios(int on)
-{
-	if (on)
-		config_gpio_table(proximity_on_gpio_table,
-			ARRAY_SIZE(proximity_on_gpio_table));
-	else
-		config_gpio_table(proximity_off_gpio_table,
-			ARRAY_SIZE(proximity_off_gpio_table));
-}
 
 static int __capella_cm3602_power(int on)
 {
@@ -285,7 +273,7 @@ static int __capella_cm3602_power(int on)
 		__func__, (on) ? "on" : "off");
 
 	if (on) {
-		config_glacier_proximity_gpios(1);
+		gpio_tlmm_config(proximity_gpio_table[0], GPIO_CFG_ENABLE);
 		gpio_set_value(PM8058_GPIO_PM_TO_SYS(GLACIER_PS_SHDN), 1);
 		rc = vreg_enable(vreg);
 		if (rc < 0)
@@ -295,7 +283,7 @@ static int __capella_cm3602_power(int on)
 		if (rc < 0)
 			printk(KERN_ERR "%s: vreg disable failed\n", __func__);
 		gpio_set_value(PM8058_GPIO_PM_TO_SYS(GLACIER_PS_SHDN), 0);
-		config_glacier_proximity_gpios(0);
+		gpio_tlmm_config(proximity_gpio_table[1], GPIO_CFG_ENABLE);
 	}
 
 	return rc;
@@ -395,35 +383,9 @@ static struct platform_device *headset_devices[] = {
 	/* Please put the headset detection driver on the last */
 };
 
-static struct headset_adc_config htc_headset_mgr_config[] = {
-	{
-		.type = HEADSET_MIC,
-		.adc_max = 54808,
-		.adc_min = 44587,
-	},
-	{
-		.type = HEADSET_METRICO, /* HEADSET_BEATS */
-		.adc_max = 44586,
-		.adc_min = 15951,
-	},
-	{
-		.type = HEADSET_NO_MIC, /* HEADSET_MIC */
-		.adc_max = 15950,
-		.adc_min = 1331,
-	},
-	{
-		.type = HEADSET_NO_MIC,
-		.adc_max = 1330,
-		.adc_min = 0,
-	},
-};
-
 static struct htc_headset_mgr_platform_data htc_headset_mgr_data = {
-	.driver_flag		= 0,
 	.headset_devices_num	= ARRAY_SIZE(headset_devices),
 	.headset_devices	= headset_devices,
-	.headset_config_num	= ARRAY_SIZE(htc_headset_mgr_config),
-	.headset_config		= htc_headset_mgr_config,
 };
 
 static struct microp_function_config microp_functions[] = {
@@ -524,6 +486,7 @@ static struct akm8975_platform_data compass_platform_data = {
 };
 
 static struct tps65200_platform_data tps65200_data = {
+	.gpio_chg_int = MSM_GPIO_TO_INT(PM8058_GPIO_PM_TO_SYS(GLACIER_GPIO_CHG_INT)),
 	.charger_check = 0,
 };
 
@@ -1260,6 +1223,17 @@ static void __init glacier_init_marimba(void)
 	}
 }
 
+static struct tpa2051d3_platform_data tpa2051d3_platform_data = {
+	//.gpio_tpa2051_spk_en = GLACIER_AUD_SPK_SD,
+};
+
+static struct i2c_board_info tpa2051_devices[] = {
+	{
+		I2C_BOARD_INFO(TPA2051D3_I2C_NAME, 0xE0 >> 1),
+		.platform_data = &tpa2051d3_platform_data,
+	},
+};
+
 #ifdef CONFIG_MSM7KV2_AUDIO
 static struct resource msm_aictl_resources[] = {
 	{
@@ -1585,6 +1559,19 @@ static struct i2c_board_info msm_marimba_board_info[] = {
 		I2C_BOARD_INFO("marimba", 0xc),
 		.platform_data = &marimba_pdata,
 	}
+};
+
+static struct msm_handset_platform_data hs_platform_data = {
+	.hs_name = "7k_handset",
+	.pwr_key_delay_ms = 500, /* 0 will disable end key */
+};
+
+static struct platform_device hs_device = {
+	.name   = "msm-handset",
+	.id     = -1,
+	.dev    = {
+		.platform_data = &hs_platform_data,
+	},
 };
 
 static struct msm_pm_platform_data msm_pm_data[MSM_PM_SLEEP_MODE_NR] = {
@@ -2418,22 +2405,6 @@ void config_glacier_usb_id_gpios(bool output)
 	}
 }
 
-static struct cable_detect_platform_data cable_detect_pdata = {
-	.detect_type 		= CABLE_TYPE_ID_PIN,
-	.usb_id_pin_gpio 	= GLACIER_GPIO_USB_ID_PIN,
-	.config_usb_id_gpios 	= config_glacier_usb_id_gpios,
-	.dock_detect		= 1,
-	.dock_pin_gpio		= GLACIER_GPIO_DOCK_PIN,
-};
-
-static struct platform_device cable_detect_device = {
-	.name	= "cable_detect",
-	.id	= -1,
-	.dev	= {
-		.platform_data = &cable_detect_pdata,
-	},
-};
-
 static struct msm_gpio msm_i2c_gpios_hw[] = {
 	{ GPIO_CFG(70, 1, GPIO_CFG_INPUT, GPIO_CFG_NO_PULL, GPIO_CFG_16MA), "i2c_scl" },
 	{ GPIO_CFG(71, 1, GPIO_CFG_INPUT, GPIO_CFG_NO_PULL, GPIO_CFG_16MA), "i2c_sda" },
@@ -3007,6 +2978,7 @@ static struct platform_device *devices[] __initdata = {
         &android_pmem_adsp_device,
         &msm_device_i2c,
         &msm_device_i2c_2,
+	&hs_device,
 #ifdef CONFIG_INPUT_CAPELLA_CM3602
         &capella_cm3602,
 #endif
@@ -3060,7 +3032,6 @@ static struct platform_device *devices[] __initdata = {
 #ifdef CONFIG_ARCH_MSM_FLASHLIGHT
         &glacier_flashlight_device,
 #endif
-	&cable_detect_device,
 };
 
 static void __init glacier_init(void)
@@ -3154,6 +3125,9 @@ static void __init glacier_init(void)
 	i2c_register_board_info(2, msm_marimba_board_info,
 			ARRAY_SIZE(msm_marimba_board_info));
 
+	i2c_register_board_info(0, tpa2051_devices,
+			ARRAY_SIZE(tpa2051_devices));
+
 	i2c_register_board_info(4 /* QUP ID */, msm_camera_boardinfo,
 				ARRAY_SIZE(msm_camera_boardinfo));
 #ifdef CONFIG_I2C_SSBI
@@ -3209,7 +3183,7 @@ static void __init glacier_init(void)
 	glacier_te_gpio_config();
 #endif
 	glacier_init_panel();
-	glacier_wifi_init();
+	msm7x30_wifi_init();
 }
 
 static unsigned pmem_sf_size = MSM_PMEM_SF_SIZE;
